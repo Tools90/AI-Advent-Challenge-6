@@ -26,13 +26,19 @@ type config struct {
 	keyFile string
 	apiKey  string
 	addr    string
+	mcpNode string
+	mcpCLI  string
+	mcpName string
+	mcpDir  string
 }
 
 type server struct {
-	cfg    config
-	store  *ChatStore
-	agent  *Agent
-	chatMu sync.Mutex
+	cfg     config
+	store   *ChatStore
+	agent   *Agent
+	mcp     *MCPClient
+	mcpInfo map[string]any
+	chatMu  sync.Mutex
 }
 
 func main() {
@@ -51,10 +57,21 @@ func main() {
 	}
 
 	tools := buildTools()
+	ensureMCPDemo(cfg.mcpDir)
+	mcpCtx, mcpCancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	mcpClient, mcpErr := NewMCPClient(mcpCtx, cfg.mcpName, cfg.mcpNode, cfg.mcpCLI, cfg.mcpDir)
+	mcpCancel()
+	if mcpErr != nil {
+		log.Printf("mcp: %v", mcpErr)
+	} else {
+		addMCPTools(tools, mcpClient, cfg.mcpName)
+		log.Printf("mcp: подключено, инструментов: %d", len(mcpClient.Tools()))
+	}
 	client := NewDeepSeekClient(cfg.baseURL, cfg.apiKey, cfg.model)
 	agent := NewAgent(client, tools, 6)
+	mcpInfo := mcpStatus(mcpClient, cfg.mcpName, mcpErr)
 
-	s := &server{cfg: cfg, store: store, agent: agent}
+	s := &server{cfg: cfg, store: store, agent: agent, mcp: mcpClient, mcpInfo: mcpInfo}
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /", s.index)
@@ -87,6 +104,9 @@ func main() {
 	if err := srv.Shutdown(shutdownCtx); err != nil {
 		log.Printf("shutdown: %v", err)
 	}
+	if s.mcp != nil {
+		_ = s.mcp.Close()
+	}
 }
 
 func (s *server) index(w http.ResponseWriter, r *http.Request) {
@@ -116,6 +136,7 @@ func (s *server) state(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{
 		"turns":      s.store.Get().Turns,
 		"tools":      s.agent.Tools(),
+		"mcp":        s.mcpInfo,
 		"model":      s.cfg.model,
 		"configured": s.cfg.apiKey != "",
 	})
@@ -187,7 +208,11 @@ func loadConfig() config {
 	baseURL := strings.TrimRight(envOr("DEEPSEEK_BASE_URL", "https://api.deepseek.com"), "/")
 	model := envOr("DEEPSEEK_MODEL", "deepseek-flash")
 	keyFile := envOr("DEEPSEEK_API_KEY_FILE", "api_key.txt")
-	port := envOr("PORT", "8085")
+	port := envOr("PORT", "8086")
+	mcpNode := envOr("MCP_NODE", `C:\Program Files\nodejs\node.exe`)
+	mcpCLI := envOr("MCP_NPX_CLI", `C:\Program Files\nodejs\node_modules\npm\bin\npx-cli.js`)
+	mcpName := envOr("MCP_SERVER", "filesystem")
+	mcpDir := envOr("MCP_ALLOWED_DIR", "data/mcp-demo")
 
 	return config{
 		baseURL: baseURL,
@@ -195,6 +220,10 @@ func loadConfig() config {
 		keyFile: keyFile,
 		apiKey:  readSecret(keyFile, "sk-your-key-here"),
 		addr:    ":" + port,
+		mcpNode: mcpNode,
+		mcpCLI:  mcpCLI,
+		mcpName: mcpName,
+		mcpDir:  mcpDir,
 	}
 }
 

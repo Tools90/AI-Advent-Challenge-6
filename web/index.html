@@ -123,6 +123,9 @@
     margin-bottom: 7px;
   }
   .tool:last-child { margin-bottom: 0; }
+  .tool.mcp { border-left-color: var(--amber); }
+  .tool-origin { margin-left: 5px; padding: 1px 5px; border-radius: 4px; font-family: var(--mono); font-size: 8.5px; color: var(--blue); background: var(--blue-soft); }
+  .tool.mcp .tool-origin { color: var(--amber); background: var(--amber-soft); }
   .tool-name { font-family: var(--mono); font-size: 11.5px; font-weight: 700; color: var(--blue); }
   .tool-desc { margin-top: 4px; font-size: 11px; line-height: 1.45; color: var(--muted); }
   .tool details { margin-top: 6px; }
@@ -503,14 +506,15 @@
 <body>
 <div class="app">
   <header class="topbar">
-    <div class="logo">D6</div>
+    <div class="logo">D16</div>
     <div class="brand">
-      <h1>Agent Console</h1>
-      <p>AI Advent Challenge · День 6 · tool-calling агент</p>
+      <h1>Agent Console MCP</h1>
+      <p>AI Advent Challenge · День 16 · MCP + локальные инструменты</p>
     </div>
     <div class="spacer"></div>
     <span class="badge" id="modelBadge">deepseek-flash</span>
     <span class="badge" id="toolsBadge">tools: —</span>
+    <span class="badge" id="mcpBadge">MCP: -</span>
     <span class="badge" id="configBadge">ключ: —</span>
   </header>
 
@@ -574,6 +578,7 @@
   const state = {
     turns: [],
     tools: [],
+    mcp: null,
     model: "",
     configured: false,
     busy: false,
@@ -620,11 +625,21 @@
       const data = await api("/api/state");
       state.turns = data.turns || [];
       state.tools = data.tools || [];
+      state.mcp = data.mcp || null;
       state.model = data.model || "";
       state.configured = !!data.configured;
 
       $("modelBadge").textContent = state.model || "deepseek-flash";
       $("toolsBadge").textContent = "tools: " + state.tools.length;
+      const mcpBadge = $("mcpBadge");
+      if (mcpBadge) {
+        if (state.mcp) {
+          mcpBadge.textContent = "MCP: " + state.mcp.status + " (" + (state.mcp.tools || []).length + ")";
+          mcpBadge.className = "badge " + (state.mcp.status === "connected" ? "ok" : "warn");
+        } else {
+          mcpBadge.textContent = "MCP: -";
+        }
+      }
 
       const configBadge = $("configBadge");
       configBadge.textContent = state.configured ? "ключ: есть" : "ключ: нет";
@@ -642,11 +657,12 @@
   function renderTools() {
     $("toolList").innerHTML = state.tools.map((tool) => {
       const fn = tool.function || {};
-      return `<div class="tool">
-        <div class="tool-name">${h(fn.name)}</div>
+      const isMCP = String(fn.name || "").startsWith("mcp__");
+      return `<div class="tool ${isMCP ? "mcp" : "local"}">
+        <div class="tool-name">${h(fn.name)} <span class="tool-origin">${isMCP ? "MCP" : "LOCAL"}</span></div>
         <div class="tool-desc">${h(fn.description || "")}</div>
         <details>
-          <summary>схема аргументов</summary>
+          <summary>Схема аргументов</summary>
           <pre>${h(JSON.stringify(fn.parameters || {}, null, 2))}</pre>
         </details>
       </div>`;
@@ -658,7 +674,8 @@
       "Что такое HTTP?",
       "Сколько будет 17 * 23?",
       "Который сейчас час в Москве?",
-      "Сколько рублей в 15% от 200 долларов?"
+      "Сколько рублей в 15% от 200 долларов?",
+      "Через MCP прочитай numbers.txt и посчитай сумму чисел локальным калькулятором."
     ];
     $("samples").innerHTML = samples.map((text) =>
       `<button class="sample" type="button" data-prompt="${h(text)}">${h(text)}</button>`
